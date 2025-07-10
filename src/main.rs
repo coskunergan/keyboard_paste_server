@@ -8,13 +8,15 @@ use serde::Deserialize;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
+use hashbrown::HashSet;
 
 // Global state to store the latest valid barcode and server startup time
 lazy_static::lazy_static! {
     static ref LATEST_BARCODE: Mutex<Option<String>> = Mutex::new(None);
-    static ref STARTUP_TIME:  Mutex<DateTime<FixedOffset>> = {
+    static ref PASTED_BARCODES: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
+    static ref STARTUP_TIME:  /*Mutex<*/DateTime<FixedOffset>/*>*/ = {
         let timezone_offset = FixedOffset::east_opt(3 * 3600).unwrap(); // +03:00 Istanbul
-        Mutex::new(Utc::now().with_timezone(&timezone_offset))
+        /*Mutex::new(*/Utc::now().with_timezone(&timezone_offset)/*)*/
     };
 }
 
@@ -43,14 +45,14 @@ async fn collect_latest_barcode() -> Result<(), Box<dyn std::error::Error>> {
     let packets = fetch_packets().await?;
 
     // Get the server startup time
-    let startup_time = *STARTUP_TIME.lock().unwrap();
+    let startup_time = *STARTUP_TIME/*.lock().unwrap()*/;
     let timezone_offset = FixedOffset::east_opt(3 * 3600).unwrap();
 
     // Get the last packet with status "OK", valid barcode, and timestamp after startup
     let latest_valid_barcode = packets.into_iter().rev().find(|packet| {
         // Validate status and barcode length
         if packet.status != "OK"
-        /*|| packet.barcode.len() != 13*/
+        /*|| packet.barcode.len() != 18*/
         {
             return false;
         }
@@ -93,13 +95,19 @@ async fn paste_latest_barcode() -> Result<(), Box<dyn std::error::Error>> {
         println!("No barcode to paste");
         return Ok(());
     }
-    let timezone_offset = FixedOffset::east_opt(3 * 3600).unwrap(); // +03:00 Istanbul
-    let now = Utc::now().with_timezone(&timezone_offset);
 
-    *STARTUP_TIME.lock().unwrap() = now;
+    //let timezone_offset = FixedOffset::east_opt(3 * 3600).unwrap(); // +03:00 Istanbul
+    //let now = Utc::now().with_timezone(&timezone_offset);
+    //*STARTUP_TIME.lock().unwrap() = now;
 
     // Get the barcode string
     let text = barcode.as_ref().unwrap().clone();
+
+    let mut pasted_barcodes = PASTED_BARCODES.lock().unwrap();
+    if pasted_barcodes.contains(&text) {
+        println!("Barcode {} already pasted, skipping", text);
+        return Ok(());
+    }
 
     // Set clipboard content
     let mut ctx: ClipboardContext = ClipboardProvider::new()?;
@@ -127,6 +135,7 @@ async fn paste_latest_barcode() -> Result<(), Box<dyn std::error::Error>> {
         simulate(&EventType::KeyRelease(Key::Return)).unwrap();
     });
 
+    pasted_barcodes.insert(text.clone());
     println!("Pasted barcode: {}", text);
     Ok(())
 }
@@ -135,7 +144,7 @@ async fn paste_latest_barcode() -> Result<(), Box<dyn std::error::Error>> {
 async fn main() -> std::io::Result<()> {
     // Log the startup time
     {
-        println!("Server started at: {}", *STARTUP_TIME.lock().unwrap());
+        println!("Server started at: {}", *STARTUP_TIME/*.lock().unwrap()*/);
     }
 
     // Start a background task to collect the latest barcode every 5 seconds
@@ -164,3 +173,5 @@ async fn main() -> std::io::Result<()> {
         .run()
         .await
 }
+
+//0680002 2507018268
