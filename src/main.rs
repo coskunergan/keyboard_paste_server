@@ -39,8 +39,8 @@ struct Packet {
 async fn fetch_packets() -> Result<Vec<Packet>, ReqwestError> {
     let client = reqwest::Client::new();
     let response = client
-        //.get("http://172.22.5.196:8080/packets") // burası açılacak!!!
-        .get("http://localhost:8080/packets") 
+        .get("http://172.22.5.196:8080/packets") // burası açılacak!!!
+        //.get("http://localhost:8080/packets") 
         .send()
         .await?
         .json::<Vec<Packet>>()
@@ -62,7 +62,7 @@ async fn collect_latest_barcode() -> Result<(), Box<dyn std::error::Error>> {
     let latest_valid_barcode = packets.into_iter().rev().find(|packet| {
         // Validate status and barcode length
         if packet.status != "OK"
-        /*|| packet.barcode.len() != 18*/  // burası açılacak!!!
+        || packet.barcode.len() != 18  // burası açılacak!!!
         {
             return false;
         }
