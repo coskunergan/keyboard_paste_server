@@ -6,9 +6,11 @@ use hashbrown::HashSet;
 use rdev::{simulate, EventType, Key};
 use reqwest::Error as ReqwestError;
 use serde::Deserialize;
+use serialport::{self}; // serialport kütüphanesi eklendi
+use std::io::{self, Read};
 use std::sync::Mutex;
 use std::thread;
-use std::time::Duration;
+use std::time::Duration; // io::Read trait'i eklendi
 
 const COMPILED_AT: &str = env!(
     "COMPILED_AT",
@@ -26,6 +28,7 @@ lazy_static::lazy_static! {
         let timezone_offset = FixedOffset::east_opt(3 * 3600).unwrap(); // +03:00 Istanbul
         /*Mutex::new(*/Utc::now().with_timezone(&timezone_offset)/*)*/
     };
+    static ref SERVER_BARCODES: Mutex<HashSet<String>> = Mutex::new(HashSet::new()); // Sunucudan gelen barkodları tutmak için yeni HashSet
 }
 
 #[derive(Deserialize)]
@@ -40,7 +43,7 @@ async fn fetch_packets() -> Result<Vec<Packet>, ReqwestError> {
     let client = reqwest::Client::new();
     let response = client
         .get("http://172.22.5.196:8080/packets") // burası açılacak!!!
-        //.get("http://localhost:8080/packets") 
+        //.get("http://localhost:8080/packets")
         .send()
         .await?
         .json::<Vec<Packet>>()
@@ -54,20 +57,20 @@ async fn collect_latest_barcode() -> Result<(), Box<dyn std::error::Error>> {
 
     // Get the server startup time
     let startup_time = *STARTUP_TIME/*.lock().unwrap()*/;
-    let timezone_offset = FixedOffset::east_opt(3 * 3600).unwrap();
+    let timezone_offset = FixedOffset::east_opt(0 * 3600).unwrap(); // son 3 saati yazdırabilir.
 
-    let mut pasted_barcodes = PASTED_BARCODES.lock().unwrap();
+    let pasted_barcodes = PASTED_BARCODES.lock().unwrap();
+    let mut server_barcodes = SERVER_BARCODES.lock().unwrap(); // Server barkodlarını güncellemek için
 
     // Get the last packet with status "OK", valid barcode, and timestamp after startup
     let latest_valid_barcode = packets.into_iter().rev().find(|packet| {
         // Validate status and barcode length
-        if packet.status != "OK"
-        || packet.barcode.len() != 18  // burası açılacak!!!
+        if packet.status != "OK" || packet.barcode.len() != 18
         {
             return false;
         }
 
-        if pasted_barcodes.contains(&packet.barcode) {            
+        if pasted_barcodes.contains(&packet.barcode) {
             return false;
         }
 
@@ -98,13 +101,13 @@ async fn collect_latest_barcode() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Update the global latest barcode
-    let mut barcode = LATEST_BARCODE.lock().unwrap();
+    
     match latest_valid_barcode {
         Some(packet) => {
-            *barcode = Some(packet.barcode.clone());
-            pasted_barcodes.insert(packet.barcode.clone());
+            // Add all valid barcodes from the server to SERVER_BARCODES for later comparison with COM port data
+            server_barcodes.insert(packet.barcode.clone());
             println!(
-                "Stored latest barcode: {} (timestamp: {})",
+                "Stored latest barcode from server: {} (timestamp: {})",
                 packet.barcode, packet.timestamp
             );
         }
@@ -158,6 +161,82 @@ async fn paste_latest_barcode() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+// Yeni eklenen fonksiyon: COM portu dinler ve barkodları işler
+async fn listen_com_port() -> Result<(), Box<dyn std::error::Error>> {
+    let port_name = "COM3"; // Burayı kendi COM port numaranızla değiştirin (örn: "COM1", "COM2" vb.)
+    let baud_rate = 9600; // Barkod okuyucunuzun baud rate'ini buraya girin
+
+    println!(
+        "Attempting to open serial port: {} with baud rate {}",
+        port_name, baud_rate
+    );
+
+    let mut port = serialport::new(port_name, baud_rate)
+        .timeout(Duration::from_millis(100)) // Okuma zaman aşımı
+        .open()?;
+
+    let mut buffer: Vec<u8> = vec![0; 128]; // Okuma tamponu
+    let mut received_data = String::new();
+
+    loop {
+        match port.read(buffer.as_mut_slice()) {
+            Ok(bytes_read) => {
+                if bytes_read > 0 {
+                    let received_str = String::from_utf8_lossy(&buffer[..bytes_read]);
+                    received_data.push_str(&received_str);
+
+                    // Yeni satır karakteri veya yeterli uzunlukta bir barkod algılarsak işleyelim
+                    if received_data.contains('\n') || received_data.len() >= 18 {
+                        // Yeni satır karakterine göre bölelim
+                        let parts: Vec<&str> = received_data.split('\n').collect();
+                        for part in parts {
+                            let trimmed_part = part.trim();
+                            if trimmed_part.len() == 18 {
+                                let incoming_barcode = trimmed_part.to_string();
+                                println!("Received barcode from COM port: {}", incoming_barcode);
+
+                                let server_barcodes = SERVER_BARCODES.lock().unwrap();
+                                if server_barcodes.contains(&incoming_barcode) {
+                                    println!(
+                                        "Matching barcode found! Preparing to paste: {}",
+                                        incoming_barcode
+                                    );                                                                   
+                                    let mut latest_barcode_guard = LATEST_BARCODE.lock().unwrap();
+                                    *latest_barcode_guard = Some(incoming_barcode.clone()); // Eşleşen barkodu ayarla
+                                    drop(latest_barcode_guard); // Mutex kilidini bırak
+
+                                    // paste_latest_barcode'u doğrudan çağır
+                                    if let Err(e) = paste_latest_barcode().await {
+                                        eprintln!(
+                                            "Error pasting barcode from COM port match: {}",
+                                            e
+                                        );
+                                    }
+                                } else {
+                                    println!("Received barcode from COM port does not match any server barcode: {}", incoming_barcode);
+                                }
+                            } else if !trimmed_part.is_empty() {
+                                // 18 karakter olmayan ama boş olmayan veriyi de yazdıralım
+                                //println!("Received partial or invalid data from COM port: '{}' (length: {})", trimmed_part, trimmed_part.len());
+                            }
+                        }
+                        received_data.clear(); // İşlenen veriyi temizle
+                    }
+                }
+            }
+            Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {
+                // Zaman aşımı, veri yok, döngü devam etsin
+            }
+            Err(e) => {
+                eprintln!("Error reading from serial port: {}", e);
+                // Hata durumunda kısa bir süre bekleyip tekrar denemek faydalı olabilir
+                time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+        time::sleep(Duration::from_millis(50)).await; // İşlemciyi yormamak için kısa bir bekleme
+    }
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     // Log the startup time
@@ -170,10 +249,11 @@ async fn main() -> std::io::Result<()> {
             "Server started at: {}",
             *STARTUP_TIME /*.lock().unwrap()*/
         );
-    }    
-    println!("Server Version : 1.0");
+    }
+    println!("Server Version : 1.1");
 
     // Start a background task to collect the latest barcode every 5 seconds
+    // Bu görev artık aynı zamanda SERVER_BARCODES'i de güncelleyecek
     spawn(async {
         loop {
             if let Err(e) = collect_latest_barcode().await {
@@ -184,12 +264,21 @@ async fn main() -> std::io::Result<()> {
     });
 
     // Start a separate task to paste the latest barcode every 3100 seconds
+    // Bu görev sadece sunucudan gelen ve eşleşen barkodu yapıştırmak için kalacak
     spawn(async {
         loop {
-            time::sleep(Duration::from_secs(10)).await;
+            time::sleep(Duration::from_secs(10)).await; // Bu kısım hala gerekli mi kontrol edilmeli, eğer paste_latest_barcode() sadece COM portundan tetiklenecekse bu kısım kaldırılabilir.
+                                                        // COM portundan bir eşleşme geldiğinde LATEST_BARCODE dolduğu için, burası da onu yapıştırabilir.
             if let Err(e) = paste_latest_barcode().await {
-                println!("Error pasting barcode: {}", e);
+                println!("Error pasting barcode from timed task: {}", e);
             }
+        }
+    });
+
+    // Yeni: COM port dinleme görevini başlat
+    spawn(async {
+        if let Err(e) = listen_com_port().await {
+            eprintln!("Error listening on COM port: {}", e);
         }
     });
 
