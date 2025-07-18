@@ -14,6 +14,7 @@ lazy_static = "1.4"
 chrono = "0.4"
 hashbrown = "0.15"
 serialport = "4.2.0"
+rodio = "0.17.3" 
 
 [build-dependencies]
 chrono = "0.4"
