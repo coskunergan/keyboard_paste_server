@@ -5,16 +5,14 @@ use clipboard::{ClipboardContext, ClipboardProvider};
 use hashbrown::HashSet;
 use rdev::{simulate, EventType, Key};
 use reqwest::Error as ReqwestError;
-use rodio::{Decoder, OutputStream, Sink}; // rodio kütüphanesinden gerekli trait'ler
+use rodio::{Decoder, OutputStream, Sink};
 use serde::Deserialize;
 use serialport::{self};
-use std::fs::File; // Ses dosyalarını okumak için
-use std::io::BufReader;
-use std::io::Cursor; // Ses verisini okumak için Cursor
+use std::io::Cursor;
 use std::io::{self, Read};
 use std::sync::Mutex;
 use std::thread;
-use std::time::Duration; // Tamponlu okuyucu için
+use std::time::Duration;
 
 const COMPILED_AT: &str = env!(
     "COMPILED_AT",
@@ -33,9 +31,8 @@ lazy_static::lazy_static! {
     static ref SERVER_VALID_BARCODES: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
     static ref PRINTED_BARCODES: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
 
-    // Ses dosyalarını buraya gömeceğiz
-    static ref SUCCESS_SOUND: &'static [u8] = include_bytes!("../assets/sounds/success.wav"); // success.mp3 dosyasını projenizin kök dizinine göre ayarlayın
-    static ref ERROR_SOUND: &'static [u8] = include_bytes!("../assets/sounds/error.wav");     // error.mp3 dosyasını projenizin kök dizinine göre ayarlayın
+    static ref SUCCESS_SOUND: &'static [u8] = include_bytes!("../assets/sounds/success.wav");
+    static ref ERROR_SOUND: &'static [u8] = include_bytes!("../assets/sounds/error.wav");
 }
 
 #[derive(Deserialize)]
@@ -98,8 +95,11 @@ async fn paste_latest_barcode(barcode_str: String) -> Result<(), Box<dyn std::er
         PRINTED_BARCODES.lock().unwrap();
     if printed_barcode.contains(&barcode_str) {
         println!("Barcode: {} Already printed!", barcode_str);
-        // İsteğe bağlı: Burada bir "zaten yazdırıldı" sesi çalabilirsiniz.
-        // play_sound(*ERROR_SOUND).unwrap_or_else(|e| eprintln!("Error playing sound: {}", e));
+        spawn(async {
+            if let Err(e) = play_sound(*ERROR_SOUND) {
+                eprintln!("Error playing error sound: {}", e);
+            }
+        });
         return Ok(());
     }
 
@@ -204,7 +204,6 @@ async fn listen_com_port() -> Result<(), Box<dyn std::error::Error>> {
                                                 "Error pasting barcode from COM port match: {}",
                                                 e
                                             );
-                                            // Hata durumunda ses çal
                                             spawn(async {
                                                 if let Err(e) = play_sound(*ERROR_SOUND) {
                                                     eprintln!("Error playing error sound: {}", e);
@@ -213,7 +212,6 @@ async fn listen_com_port() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                     } else {
                                         println!("Received barcode from COM port does not match any server barcode: {}", incoming_barcode);
-                                        // Eşleşmeyen barkod durumunda hata sesi çal
                                         spawn(async {
                                             if let Err(e) = play_sound(*ERROR_SOUND) {
                                                 eprintln!("Error playing error sound: {}", e);
