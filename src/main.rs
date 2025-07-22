@@ -31,8 +31,11 @@ lazy_static::lazy_static! {
     static ref SERVER_VALID_BARCODES: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
     static ref PRINTED_BARCODES: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
 
+    //https://ttsmaker.com/tr
     static ref SUCCESS_SOUND: &'static [u8] = include_bytes!("../assets/sounds/success.wav");
-    static ref ERROR_SOUND: &'static [u8] = include_bytes!("../assets/sounds/error.wav");
+    static ref ERROR_SOUND: &'static [u8] = include_bytes!("../assets/sounds/error.wav");   
+    static ref ERROR_TEST_SOUND: &'static [u8] = include_bytes!("../assets/sounds/error_test.wav");
+    static ref ERROR_BARCODE_SOUND: &'static [u8] = include_bytes!("../assets/sounds/error_barcode.wav");
 }
 
 #[derive(Deserialize)]
@@ -96,8 +99,8 @@ async fn paste_latest_barcode(barcode_str: String) -> Result<(), Box<dyn std::er
     if printed_barcode.contains(&barcode_str) {
         println!("Barcode: {} Already printed!", barcode_str);
         spawn(async {
-            if let Err(e) = play_sound(*ERROR_SOUND) {
-                eprintln!("Error playing error sound: {}", e);
+            if let Err(e) = play_sound(*ERROR_BARCODE_SOUND) {
+                eprintln!("Error playing error barcode sound: {}", e);
             }
         });
         return Ok(());
@@ -213,8 +216,8 @@ async fn listen_com_port() -> Result<(), Box<dyn std::error::Error>> {
                                     } else {
                                         println!("Received barcode from COM port does not match any server barcode: {}", incoming_barcode);
                                         spawn(async {
-                                            if let Err(e) = play_sound(*ERROR_SOUND) {
-                                                eprintln!("Error playing error sound: {}", e);
+                                            if let Err(e) = play_sound(*ERROR_TEST_SOUND) {
+                                                eprintln!("Error playing error test sound: {}", e);
                                             }
                                         });
                                     }
